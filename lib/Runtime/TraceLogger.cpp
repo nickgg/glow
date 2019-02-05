@@ -33,12 +33,25 @@ uint64_t timestamp_now() {
 
 TraceThread::TraceThread(int tid) : tid_(tid) {}
 
+void TraceThread::addTraceEvent(llvm::StringRef name, llvm::StringRef type,
+                     uint64_t timestamp) {
+  traceEvents_.push_back(TraceEvent(name, timestamp, type, tid_));
+}
+
 void TraceThread::beginTraceEvent(llvm::StringRef name) {
-  traceEvents_.push_back(TraceEvent(name, timestamp_now(), 'B', tid_));
+  beginTraceEvent(name, timestamp_now());
+}
+
+void TraceThread::beginTraceEvent(llvm::StringRef name, uint64_t timestamp) {
+  traceEvents_.push_back(TraceEvent(name, timestamp, "B", tid_));
 }
 
 void TraceThread::endTraceEvent(llvm::StringRef name) {
-  traceEvents_.push_back(TraceEvent(name, timestamp_now(), 'E', tid_));
+  endTraceEvent(name, timestamp_now());
+}
+
+void TraceThread::endTraceEvent(llvm::StringRef name, uint64_t timestamp) {
+  traceEvents_.push_back(TraceEvent(name, timestamp, "E", tid_));
 }
 
 TraceLogger::TraceLogger(int pid) : pid_(pid) {}

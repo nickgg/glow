@@ -2358,6 +2358,15 @@ void LLVMIRGen::generateLLVMIRForInstr(llvm::IRBuilder<> &builder,
     break;
   }
 
+  case Kinded::Kind::TraceEventInstKind: {
+    auto *TEI = llvm::cast<TraceEventInst>(I);
+    auto *data = TEI->getData();
+    auto *dataPtr = emitValueAddress(builder, data);
+    auto *F = getFunction("write_timestamp");
+    createCall(builder, F, {dataPtr});
+    break;
+  }
+
   default:
 #ifndef NDEBUG
     llvm::errs() << "Cannot select the instruction:\n";

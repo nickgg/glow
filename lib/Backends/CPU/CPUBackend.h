@@ -61,6 +61,9 @@ public:
   bool isOpSupported(Kinded::Kind opKind, ElemKind elementTy) const override;
 
   bool shouldLower(const Node *N) const override;
+
+  bool instrument(Function *F) const;
+
   /// @}
 
 protected:

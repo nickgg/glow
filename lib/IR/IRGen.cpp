@@ -394,6 +394,13 @@ public:
       registerIR(TKN->getIndices(), V->getIndices());
       break;
     }
+    case glow::Kinded::Kind::TraceEventNodeKind: {
+      auto *TEN = cast<TraceEventNode>(N);
+      auto *dataTensor = valueForNode(TEN->getData());
+      auto *E = builder_.createTraceEventInst(
+          TEN->getName(), dataTensor, TEN->getEventName(), TEN->getEventType());
+      break;
+    }
     }
   }
 };

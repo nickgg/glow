@@ -28,6 +28,21 @@ class CPUFunction final : public CompiledFunction {
   /// initializes the LLVM backends.
   std::unique_ptr<llvm::orc::GlowJIT> JIT_;
 
+  /// \name State for profiling
+
+  struct TraceInfo {
+    /// Is the function instrumented for tracing?
+    bool instrumented;
+
+    /// Placeholder associated with the backing Tensor for trace events.
+    Placeholder *traceBacking_{nullptr};
+
+    /// Ordered list of event names, matching trace events.
+    std::vector<std::string> traceEventNames_;
+  } traceInfo_;
+
+  ///@}
+
 public:
   /// Ctor.
   CPUFunction(std::unique_ptr<llvm::orc::GlowJIT> JIT,
@@ -40,6 +55,11 @@ public:
 
   void collectConstants(Module *module) override;
   ///@}
+
+  /// Enables
+  void addTracingInfo(Placeholder *traceBacking,
+                      std::vector<std::string> traceEventNames);
+
 private:
   /// Load constant tensors from \p ctx into \p weightsAddress, as defined by
   /// the RuntimeBundle (pre-run).

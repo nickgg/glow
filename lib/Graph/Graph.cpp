@@ -2263,6 +2263,15 @@ void Function::createLSTM(Context &ctx, llvm::StringRef namePrefix,
   }
 };
 
+TraceEventNode* Function::createTraceEvent(llvm::StringRef eventName,
+                                llvm::StringRef eventType) {
+  std::string name = (getName() + "_" + eventName + "_trace").str();
+  Placeholder *traceData = getParent()->createPlaceholder(
+      ElemKind::Int64ITy, {1}, name, false);
+
+  return addNode(new TraceEventNode(name, traceData, eventName, eventType));
+}
+
 //===----------------------------------------------------------------------===//
 //                   Graph dumping and printing
 //===----------------------------------------------------------------------===//

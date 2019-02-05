@@ -60,6 +60,12 @@ void CPUFunction::updatePlaceholders(Context *ctx,
   }
 }
 
+void CPUFunction::addTracingInfo(Placeholder *traceBacking,
+                                 std::vector<std::string> traceEventNames) {
+  traceBacking_ = traceBacking;
+  traceEvenNames_ = traceEventNames;
+}
+
 void CPUFunction::execute(Context *ctx) {
   uint8_t *baseActivationsAddress{nullptr};
 

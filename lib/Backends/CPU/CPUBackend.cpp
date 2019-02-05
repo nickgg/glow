@@ -206,6 +206,8 @@ bool CPUBackend::shouldLower(const Node *N) const {
   return true;
 }
 
+bool CPUBackend::instrument(Function *F) { return false; }
+
 llvm::CallInst *glow::createCall(llvm::IRBuilder<> &builder,
                                  llvm::Function *callee,
                                  llvm::ArrayRef<llvm::Value *> args) {

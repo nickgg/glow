@@ -35,15 +35,15 @@ struct TraceEvent {
   /// Time of the event, in milliseconds since epoch.
   uint64_t timestamp;
 
-  /// Type of the event, a one char code (see Event Descriptions in the Trace
-  /// Event Format spec). e.g. 'B' for begin event, 'E' for end event.
-  char type;
+  /// Type of the event, a (usually) one char code (see Event Descriptions in
+  /// the Trace Event Format spec). e.g. 'B' for begin event, 'E' for end event.
+  std::string type;
 
   /// Thread Id for this event. All Events on the same tid will be shown on the
   /// same row of the trace.
   int tid;
 
-  TraceEvent(llvm::StringRef n, uint64_t ts, char c, int t)
+  TraceEvent(llvm::StringRef n, uint64_t ts, llvm::StringRef c, int t)
       : name(n), timestamp(ts), type(c), tid(t) {}
 };
 
@@ -63,13 +63,18 @@ class TraceThread {
 public:
   TraceThread(int tid);
 
+  void addTraceEvent(llvm::StringRef name, llvm::StringRef type,
+                     uint64_t timestamp);
+
   /// Create and store a BEGIN (type 'B') TraceEvent with the \name and the
   /// current timestamp.
   void beginTraceEvent(llvm::StringRef name);
+  void beginTraceEvent(llvm::StringRef name, uint64_t timestamp);
 
   /// Create and store an END (type 'E') TraceEvent with the \name and the
   /// current timestamp. This should match a previous beginTraceEvent.
   void endTraceEvent(llvm::StringRef name);
+  void endTraceEvent(llvm::StringRef name, uint64_t timestamp);
 };
 
 /// Aggregator for a single run's TraceEvents, i.e. for a single inference.

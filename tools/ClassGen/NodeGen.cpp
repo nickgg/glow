@@ -535,6 +535,17 @@ int main(int argc, char **argv) {
                     "instead of Weight for the next iteration.");
 
   //===--------------------------------------------------------------------===//
+  //             Nodes used for debugging/profiling/printing
+  //===--------------------------------------------------------------------===//
+
+  BB.newNode("TraceEvent")
+    .addInput("Data")
+    .addMember(MemberType::String, "EventName")
+    .addMember(MemberType::String, "EventType")
+    .setHasSideEffects(true)
+    .setDocstring("Inserts a TraceEvent for profiling.");
+
+  //===--------------------------------------------------------------------===//
   //                Nodes used by quantization.
   //===--------------------------------------------------------------------===//
 

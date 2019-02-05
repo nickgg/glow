@@ -24,6 +24,8 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <chrono>
+
 using namespace glow;
 
 #define dispatchFloatingPointImpl(functionName, elemTy, ...)                   \
@@ -2316,6 +2318,14 @@ void BoundInterpreterFunction::fwdDebugPrintInst(const DebugPrintInst *I) {
   llvm::outs() << "\n";
   dumpImpl(getTensor(V));
   llvm::outs() << "\n";
+}
+
+void BoundInterpreterFunction::fwdTraceEventInst(const TraceEventInst *I) {
+  auto T = getTensor(I->getData());
+  auto IH = T->getHandle<int64_t>();
+  IH.raw(0) = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::system_clock::now().time_since_epoch())
+                  .count();
 }
 
 //===----------------------------------------------------------------------===//

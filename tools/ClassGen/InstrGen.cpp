@@ -489,6 +489,13 @@ int main(int argc, char **argv) {
       .addOperand("Src", OperandKind::In)
       .autoVerify(VerifyKind::NoVerify);
 
+  BB.newInstr("TraceEvent")
+      .addOperand("Data", OperandKind::In)
+      .addMember(MemberType::String, "EventName")
+      .addMember(MemberType::String, "EventType")
+      .addMember(MemberType::Unsigned, "TensorIndex")
+      .autoVerify(VerifyKind::NoVerify);
+
   //===--------------------------------------------------------------------===//
   //             Instructions used for quantization
   //===--------------------------------------------------------------------===//

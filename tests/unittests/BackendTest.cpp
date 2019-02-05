@@ -18,6 +18,7 @@
 #include "glow/Graph/Context.h"
 #include "glow/Graph/Graph.h"
 #include "glow/IR/IRBuilder.h"
+#include "glow/Runtime/TraceLogger.h"
 
 #include "gtest/gtest.h"
 
@@ -25,6 +26,7 @@
 #include "llvm/Support/Casting.h"
 
 using namespace glow;
+using namespace glow::runtime;
 
 class BackendTest : public ::testing::TestWithParam<BackendKind> {
 public:
@@ -166,6 +168,45 @@ TEST_P(BackendTest, debugPrint) {
   function->execute(&ctx);
   function->afterRun(ctx);
   function->tearDownRuns();
+}
+
+TEST_P(BackendTest, traceEvent) {
+  Tensor inputs(ElemKind::FloatTy, {1, 32, 32, 3});
+  Context ctx;
+  TraceLogger traceLogger;
+  TraceThread traceThread{traceLogger.getTraceThread()};
+  ctx.setTraceLogger(&traceThread);
+
+  auto &mod = EE_.getModule();
+  Function *F = mod.createFunction("main");
+  F->setName("interpret");
+  auto *input =
+      mod.createPlaceholder(ElemKind::FloatTy, {1, 32, 32, 3}, "input", false);
+
+  auto *TE1 = F->createTraceEvent("test", "B");
+
+  auto *FCL1 = F->createFullyConnected(ctx, "fc", input, 10);
+  F->createRELU("relu4", FCL1);
+
+  auto *TE2 = F->createTraceEvent("test", "E");
+
+  ctx.allocate(mod.getPlaceholders());
+
+  EE_.compile(CompilationMode::Infer, F);
+  EE_.run(ctx);
+
+  auto TS1 = ctx.get(llvm::cast<Placeholder>(TE1->getData()))->getHandle<int64_t>().at(0);
+  auto TS2 = ctx.get(llvm::cast<Placeholder>(TE2->getData()))->getHandle<int64_t>().at(0);
+
+  ctx.getTraceEvents()->addTraceEvent(TE1->getEventName(), TE1->getEventType(),
+                                      TS1);
+  ctx.getTraceEvents()->addTraceEvent(TE2->getEventName(), TE2->getEventType(),
+                                      TS2);
+
+  traceLogger.returnTraceThread(*ctx.getTraceEvents());
+
+  std::string outputName = "test" + std::to_string((int)GetParam()) + ".json";
+  traceLogger.dumpTraceEvents(outputName);
 }
 
 /// Test the compileWithoutConstants method on the backend completes without
