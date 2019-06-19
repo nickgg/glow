@@ -56,21 +56,23 @@ void InflightBarrier::wait() {
   cv_.wait(lock, [&] { return count_ == 0; });
 }
 
-ExecutionState::ExecutionState(RunIdentifierTy id, const DAGNode *root,
+ExecutionState::ExecutionState(RunIdentifierTy id, const Schedule &schedule,
                                ThreadExecutor *executor,
                                std::unique_ptr<ExecutionContext> resultContext,
                                ResultCBTy doneCb)
     : runId_(id), cb_(doneCb), resultCtx_(std::move(resultContext)),
-      inflightNodes_(0), module_(root->module), root_(root),
+      inflightNodes_(0), module_(schedule.module_), root_(schedule),
       executor_(executor) {}
 
 void ExecutionState::init() {
   // Create a queue for the breadth-first traversal through the graph.
-  std::queue<const DAGNode *> bfsQueue;
+  std::queue<const Scheule::Task *> bfsQueue;
 
   // Place the root nodes in the queue.
-  for (const auto &node : root_->children) {
-    bfsQueue.push(node);
+  for (const auto &node : root_.tasks()) {
+    if (node.parents.size() == 0) {
+      bfsQueue.push(&node);
+    }
   }
 
   auto *resultTraceContext = resultCtx_->getTraceContext();
@@ -78,7 +80,7 @@ void ExecutionState::init() {
   // Breadth-first search.
   while (!bfsQueue.empty()) {
     // Get the next node in the BFS queue.
-    const DAGNode *node = bfsQueue.front();
+    const Schedule::Task *node = bfsQueue.front();
     bfsQueue.pop();
 
     // Make a counter for the number of node parents done.
@@ -128,11 +130,12 @@ void ExecutionState::init() {
     inputCtxs_.insert(std::make_pair(node, std::move(nodeInputCtx)));
 
     // Push all unvisited children onto the BFS queue.
-    for (const auto &child : node->children) {
+    for (const size_t childIndex : node->children) {
+      Schedule::Task *task = &node->tasks()[childIndex];
       // Use nodeParentsDone_ as a set of nodes that have been visited already
       // to avoid visiting a node more than once.
-      if (!nodeParentsDone_.count(child)) {
-        bfsQueue.push(child);
+      if (!nodeParentsDone_.count(task)) {
+        bfsQueue.push(task);
       }
     }
   }
@@ -140,7 +143,7 @@ void ExecutionState::init() {
 }
 
 std::unique_ptr<ExecutionContext>
-ExecutionState::getUniqueNodeContextPtr(const DAGNode *node) {
+ExecutionState::getUniqueNodeContextPtr(const Schedule::Task *node) {
   // The input PlaceholderBindings for the node should have been created in the
   // constructor.
   auto ctxIt = inputCtxs_.find(node);
@@ -169,7 +172,7 @@ bool ExecutionState::decrementInflightNodes(unsigned decrement) {
   return (previousValue == decrement);
 }
 
-bool ExecutionState::incrementNodeParentsDone(const DAGNode *node,
+bool ExecutionState::incrementNodeParentsDone(const Schedule::Task *node,
                                               unsigned increment) {
   // Get the parents done counter for the node. It should have
   // been created in the constructor.
@@ -236,7 +239,7 @@ void ThreadPoolExecutor::shutdown() {
   inflightBarrier_.wait();
 }
 
-void ThreadPoolExecutor::run(const DAGNode *root,
+void ThreadPoolExecutor::run(const Schedule &schedule,
                              std::unique_ptr<ExecutionContext> context,
                              RunIdentifierTy runId, ResultCBTy cb) {
   TRACE_EVENT_SCOPE(context->getTraceContext(), "ThreadPoolExecutor::run");
@@ -252,13 +255,14 @@ void ThreadPoolExecutor::run(const DAGNode *root,
 
   // If list of roots is empty, there is nothing to do. Give back the
   // bindings so the caller can reuse it.
-  if (!root) {
+  if (schedule.tasks().empty()) {
     cb(runId, llvm::Error::success(), std::move(context));
     return;
   }
 
   std::shared_ptr<ExecutionState> executionState =
-      std::make_shared<ExecutionState>(runId, root, threadPool_.getExecutor(),
+      std::make_shared<ExecutionState>(runId, schedule,
+                                       threadPool_.getExecutor(),
                                        std::move(context), std::move(cb));
   executionState->init();
 
@@ -272,14 +276,17 @@ void ThreadPoolExecutor::run(const DAGNode *root,
   executionState->incrementInflightNodes(numChildren);
   inflightBarrier_.increment(numChildren);
 
-  for (auto const &node : root->children) {
-    // Execute the node.
-    executeDAGNode(executionState, node);
+  auto &tasks = schedule.tasks();
+  for (auto &task : tasks) {
+    if (task.parents.empty()) {
+      // Execute the node.
+      executeDAGNode(executionState, &task);
+    }
   }
 }
 
 void ThreadPoolExecutor::executeDAGNode(
-    std::shared_ptr<ExecutionState> executionState, DAGNode *node) {
+    std::shared_ptr<ExecutionState> executionState, Schedule::Task *task) {
   TRACE_EVENT_SCOPE(executionState->getRawResultContextPtr()->getTraceContext(),
                     "ThreadPoolExecutor::executeDAGNode");
   DCHECK(executionState->initialized_) << "Run state must be initialized";
@@ -292,7 +299,9 @@ void ThreadPoolExecutor::executeDAGNode(
     return;
   }
 
-  auto currentDevice = node->getNextDevice();
+  // TODO(nickg): line below breaks saturation.
+  auto currentDevice = task->devices[0];
+
   // Get the DeviceManager that can run the node.
   auto deviceManagerIt = deviceManagers_.find(currentDevice);
 
@@ -310,28 +319,28 @@ void ThreadPoolExecutor::executeDAGNode(
 
   // Get the PlaceholderBindings containing all of the inputs for the node.
   std::unique_ptr<ExecutionContext> nodeCtx =
-      executionState->getUniqueNodeContextPtr(node);
+      executionState->getUniqueNodeContextPtr(task);
 
   // Run the node using the DeviceManager.
   deviceManager->runFunction(
-      node->name, std::move(nodeCtx),
+      task->name, std::move(nodeCtx),
       [this, executionState,
-       node](RunIdentifierTy id, llvm::Error err,
+       task](RunIdentifierTy id, llvm::Error err,
              std::unique_ptr<ExecutionContext> resultCtx) {
         // Immediately move the handling of the result onto this run's executor
         // to avoid doing work on the DeviceManager thread.
         executionState->getExecutor()->submit(
-            [this, executionState, node, err = std::move(err),
+            [this, executionState, task, err = std::move(err),
              ctx = std::move(resultCtx)]() mutable {
               this->handleDeviceManagerResult(executionState, std::move(err),
-                                              std::move(ctx), node);
+                                              std::move(ctx), task);
             });
       });
 }
 
 void ThreadPoolExecutor::handleDeviceManagerResult(
     std::shared_ptr<ExecutionState> executionState, llvm::Error err,
-    std::unique_ptr<ExecutionContext> ctx, const DAGNode *node) {
+    std::unique_ptr<ExecutionContext> ctx, const Schedule::Task *task) {
 
   // If executionState is null, that means that the object was deleted
   // while a node was executing. That should never happen.
@@ -349,7 +358,8 @@ void ThreadPoolExecutor::handleDeviceManagerResult(
   // If the DeviceManager executed the node, propagate its output Placeholders
   // to its children or the result PlaceholderBindings as appropriate.
   if (runWasSuccess) {
-    for (auto &child : node->children) {
+    for (size_t childIndex : task->children) {
+      Schedule::Task *child = task->parent->tasks()[childIndex];
       // Execute any child that has no parent nodes left to execute.
       bool childReadyToExecute =
           executionState->incrementNodeParentsDone(child);

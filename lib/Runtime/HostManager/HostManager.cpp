@@ -103,7 +103,7 @@ llvm::Error HostManager::addNetwork(std::unique_ptr<Module> module,
   if (cctx.precisionConfig.quantMode == QuantizationMode::Profile) {
     // Check that all functions were not partitioned.
     for (auto &network : nodeList) {
-      if (network.nodes.size() > 1) {
+      if (network.tasks().size() > 1) {
         return MAKE_ERR(
             GlowErr::ErrorCode::RUNTIME_ERROR,
             "Failed to add network for profiling: Network was "
@@ -121,10 +121,11 @@ llvm::Error HostManager::addNetwork(std::unique_ptr<Module> module,
   module->strip();
   auto sharedModule = std::shared_ptr<Module>(std::move(module));
 
-  for (auto &node : nodeList) {
-    auto &networkData = networks_[(node.root)->name];
-    networkData.dag = std::move(node);
-    networkData.module = sharedModule;
+  for (auto &schedule : nodeList) {
+    auto &networkData = networks_[schedule.functionName_];
+    schedule.module_ = sharedModule;
+
+    networkData.schedule = std::move(schedule);
   }
 
   return llvm::Error::success();

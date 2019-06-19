@@ -18,7 +18,7 @@
 
 #include "glow/Graph/Graph.h"
 #include "glow/Partitioner/PartitionerUtils.h"
-#include "glow/Runtime/RuntimeTypes.h"
+#include "glow/Runtime/Schedule.h"
 #include "glow/Support/Error.h"
 
 namespace glow {
@@ -87,7 +87,7 @@ public:
     functionToBackendName_[F] = backendName;
   }
 
-  std::string getPartitionBackendName(Function *F) {
+  std::string getPartitionBackendName(Function *F) const {
     DCHECK(functionToBackendName_.find(F) != functionToBackendName_.end())
         << "Unknown partition in Function: " << F->getName().str();
     return functionToBackendName_.find(F)->second;
@@ -271,10 +271,10 @@ public:
                      std::vector<std::unique_ptr<Backend>> &backendsHolder,
                      std::vector<Backend *> &backends);
 
-  /// If there is no need to do any partition, just generate the DAGNode based
-  /// on current functions in this module for backend \p backendName found in \p
-  /// backendMap. \p cctx is used during optimization of the Function. \returns
-  /// whether there was an error encountered.
+  /// If there is no need to do any partition, just generate the Schedule
+  /// based on current functions in this module for backend \p backendName found
+  /// in \p backendMap. \p cctx is used during optimization of the Function.
+  /// \returns whether there was an error encountered.
   llvm::Error
   createDAGWithoutPartition(llvm::StringRef backendName,
                             std::map<std::string, BackendInfo> &backendMap,

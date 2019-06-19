@@ -18,7 +18,7 @@
 #include "glow/Backend/Backend.h"
 #include "glow/Backends/DeviceManager.h"
 #include "glow/Graph/Graph.h"
-#include "glow/Runtime/RuntimeTypes.h"
+#include "glow/Runtime/Schedule.h"
 
 #include <atomic>
 #include <map>
@@ -41,10 +41,8 @@ class HostManager final {
   /// NetworkData contains data about each network in HostManager that is needed
   /// by the runtime.
   struct NetworkData {
-    DAG dag;
-    // Module that was used to create this network. Everything except
-    // placeholders and types have been removed from it.
-    std::shared_ptr<Module> module;
+    /// The schedule for executing this natwork.
+    Schedule schedule{""};
 
     /// use an atomic refcount rather than just store a shared_ptr for thread
     /// safety.

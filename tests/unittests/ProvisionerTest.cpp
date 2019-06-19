@@ -38,37 +38,27 @@ std::unique_ptr<Module> setupModule(unsigned functionCount) {
   return mod;
 }
 
-DAGListTy setupDAG(unsigned rootCount, unsigned childCount) {
+DAGListTy setupSchedule(unsigned rootCount, unsigned childCount) {
   DAGListTy partitions;
-  unsigned currentFunction = 0;
-  for (unsigned int root = 0; root < rootCount; root++) {
-    DAGNodePtrVec nodes;
-    auto rootNode = llvm::make_unique<DAGNode>();
-    auto firstNode = llvm::make_unique<DAGNode>();
-    rootNode->name = "root" + std::to_string(root);
-    rootNode->children.push_back(firstNode.get());
-    firstNode->name = "function" + std::to_string(currentFunction);
-    firstNode->logicalDevices = {0, 1};
-    firstNode->backendName = "CPU";
-    currentFunction++;
-    for (unsigned int child = 0; child < childCount; child++) {
-      auto newChild = llvm::make_unique<DAGNode>();
-      newChild->name = "function" + std::to_string(currentFunction);
-      newChild->logicalDevices = {0};
-      newChild->backendName = "CPU";
-      currentFunction++;
-      firstNode->children.push_back(newChild.get());
-      nodes.push_back(std::move(newChild));
+  unsigned nodeIdx = 0;
+  for (unsigned root = 0; root < rootCount; root++) {
+    Schedule schedule("root" + std::to_string(root));
+    schedule.addTask("function" + std::to_string(nodeIdx++), "CPU", {0, 1});
+    for (unsigned child = 1; child <= childCount; child++) {
+      unsigned taskIdx =
+          schedule.addTask("function" + std::to_string(nodeIdx++), "CPU", {0});
+      EXPECT_EQ(child, taskIdx);
+      schedule.addChild(0, taskIdx);
     }
-    nodes.push_back(std::move(firstNode));
-    partitions.push_back({std::move(rootNode), std::move(nodes)});
+
+    partitions.push_back(schedule);
   }
   return partitions;
 }
 
 TEST_F(ProvisionerTest, provisionDag) {
   auto mod = setupModule(6);
-  auto networks = setupDAG(2, 0);
+  auto networks = setupSchedule(2, 0);
 
   DeviceManagerMapTy devices;
   for (int i = 0; i < 6; i++) {
@@ -86,7 +76,7 @@ TEST_F(ProvisionerTest, provisionDag) {
 
 TEST_F(ProvisionerTest, provisionDagFail) {
   auto mod = setupModule(6);
-  auto networks = setupDAG(2, 0);
+  auto networks = setupSchedule(2, 0);
 
   DeviceManagerMapTy devices;
   for (int i = 0; i < 6; i++) {

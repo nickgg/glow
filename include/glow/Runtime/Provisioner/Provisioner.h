@@ -18,7 +18,7 @@
 
 #include "glow/Backend/Backend.h"
 #include "glow/Backends/DeviceManager.h"
-#include "glow/Runtime/RuntimeTypes.h"
+#include "glow/Runtime/Schedule.h"
 #include "glow/Support/Error.h"
 
 #include <map>

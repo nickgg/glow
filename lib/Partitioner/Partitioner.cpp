@@ -43,7 +43,7 @@ static llvm::cl::opt<bool>
 using namespace glow;
 using llvm::isa;
 
-// Sorted the std::pair<DAGNode *, uint64_t> based on the second from min to
+// Sorted the std::pair<Function *, uint64_t> based on the second from min to
 // max.
 bool sortMinMemory(const std::pair<Function *, uint64_t> &a,
                    const std::pair<Function *, uint64_t> &b) {
@@ -69,52 +69,38 @@ static uint64_t updateUsedMem(const std::set<Storage *> &usedStorage,
 void Partitioner::dumpDAG(llvm::StringRef dotFilename) const {
   if (partitions_.size() == 0)
     return;
-  auto *root = partitions_[0].root.get();
   LOG(INFO) << "Writing dotty graph for DAG after graph partitioning: "
             << dotFilename.str();
   std::ofstream myfile;
   myfile.open(dotFilename);
   myfile << "digraph DAG {\n\trankdir=TB;\n";
-  // Dump DAGNodes
-  std::vector<DAGNode *> nodes;
-  llvm::SmallSet<DAGNode *, 10> used;
-  nodes.push_back(root);
-  int cur = 0;
-  int num = 1;
-  while (cur < num) {
-    auto *node = nodes[cur];
-    for (size_t i = 0; i < node->children.size(); i++) {
-      auto child = node->children[i];
-      DescriptionBuilder db(child->name.c_str());
-      const std::string &backendName = child->backendName;
-      db.addParam("BackendName", backendName);
-      myfile << "\"" << escapeDottyString(child->name) << "\""
-             << " [ label = \"" << escapeDottyString(db) << "\"";
-      myfile << "\tshape = \"record\"\n";
-      myfile << "\tstyle=\"filled,rounded\"\n";
-      auto colorIdx = llvm::hash_value(backendName);
-      myfile << "\tfillcolor=" << getDotFileNodeColor(colorIdx) << "\n";
-      myfile << "penwidth = 2];\n";
-      if (used.count(child) == 0) {
-        nodes.push_back(child);
-        used.insert(child);
-        num++;
-      }
-    }
-    cur++;
+
+  const Schedule &schedule = partitions_[0];
+
+  // Dump nodes.
+  for (const auto &node : schedule.tasks()) {
+    DescriptionBuilder db(node.name.c_str());
+    db.addParam("BackendName", node.backendName);
+    myfile << "\"" << escapeDottyString(node.name) << "\""
+           << " [ label = \"" << escapeDottyString(db) << "\"";
+    myfile << "\tshape = \"record\"\n";
+    myfile << "\tstyle=\"filled,rounded\"\n";
+    auto colorIdx = llvm::hash_value(node.backendName);
+    myfile << "\tfillcolor=" << getDotFileNodeColor(colorIdx) << "\n";
+    myfile << "penwidth = 2];\n";
   }
 
   // Dump edges.
-  for (size_t i = 0; i < nodes.size(); i++) {
-    auto *root = nodes[i];
-    for (size_t j = 0; j < root->children.size(); j++) {
-      auto child = root->children[j];
-      myfile << "\"" << escapeDottyString(root->name) << "\""
+  for (const auto &node : schedule.tasks()) {
+    for (size_t childIndex : node.children) {
+      myfile << "\"" << escapeDottyString(node.name) << "\""
              << " -> "
-             << "\"" << escapeDottyString(child->name) << "\""
+             << "\"" << escapeDottyString(schedule.tasks()[childIndex].name)
+             << "\""
              << ";";
     }
   }
+
   myfile << "}";
 
   myfile.close();
@@ -664,10 +650,10 @@ void Partitioner::saturateHost(unsigned logicalDeviceCount) {
   }
   // Add additional logical devices to each node.
   for (auto &network : partitions_) {
-    for (auto &node : network.nodes) {
+    for (auto &node : network.tasks()) {
       // Build list of new logical devices to add to node.
       std::vector<unsigned> newDevices;
-      for (auto logical : node->logicalDevices) {
+      for (auto logical : node.logicalDevices) {
         // To ensure we do not have a logicalID collision we use the following
         // scheme. We have an iterator starting at 1 for each duplication pass.
         // The new ID we add is calculated as follows:
@@ -676,9 +662,10 @@ void Partitioner::saturateHost(unsigned logicalDeviceCount) {
           newDevices.push_back(logical + (i * logicalDeviceCount));
         }
       }
+
       // Append the new logical devices to the node's logical device vector.
-      node->logicalDevices.insert(node->logicalDevices.end(),
-                                  newDevices.begin(), newDevices.end());
+      node.logicalDevices.insert(node.logicalDevices.end(), newDevices.begin(),
+                                 newDevices.end());
     }
   }
 }
@@ -687,14 +674,7 @@ void Partitioner::saturateHost(unsigned logicalDeviceCount) {
 void Partitioner::doPartitioning(llvm::StringRef funcName,
                                  std::vector<Function *> funcs,
                                  NodeToFunctionMap &mapping, bool saveDAG) {
-  // Add a dummy node to make sure that a DAG has a single entrance.
-  DAGNodePtr DAGRoot = llvm::make_unique<DAGNode>();
-  DAGNodePtrVec nodes;
-  DAGRoot->logicalDevices = {0};
-  DAGRoot->name = funcName;
-  DAGRoot->module = module_;
-  DAGRoot->deviceIDs = {0};
-  DAGNode *root = DAGRoot.get();
+  Schedule schedule(funcName);
 
   llvm::DenseMap<Node *, Node *> currToNew;
 
@@ -710,15 +690,12 @@ void Partitioner::doPartitioning(llvm::StringRef funcName,
   // For any dependency that crosses a partition, add a placeholder and save
   // node. Record the dependence in the function graph.
   std::unordered_map<NodeValue, Placeholder *> placeholders;
-  llvm::DenseMap<Function *, DAGNode *> funcDAG;
+  llvm::DenseMap<Function *, size_t> funcDAG;
   for (auto *subF : mapping.getPartitions()) {
     if (funcDAG.find(subF) == funcDAG.end()) {
-      std::unique_ptr<DAGNode> subDAG = llvm::make_unique<DAGNode>();
-      subDAG->name = subF->getName();
-      subDAG->logicalDevices = mapping.getLogicalDeviceIDList(subF);
-      subDAG->backendName = mapping.getPartitionBackendName(subF);
-      funcDAG[subF] = subDAG.get();
-      nodes.push_back(std::move(subDAG));
+      funcDAG[subF] = schedule.addTask(subF->getName(),
+                                       mapping.getPartitionBackendName(subF),
+                                       mapping.getLogicalDeviceIDList(subF));
     }
 
     // Link subF to its parents.
@@ -753,21 +730,17 @@ void Partitioner::doPartitioning(llvm::StringRef funcName,
         if (subF == inputF)
           continue;
 
-        // Check if a DAGNode for subF's parent is created or not. If not,
+        // Check if a Node for subF's parent is created or not. If not,
         // create one.
         if (funcDAG.find(inputF) == funcDAG.end()) {
-          std::unique_ptr<DAGNode> subDAG = llvm::make_unique<DAGNode>();
-          subDAG->name = inputF->getName();
-          subDAG->logicalDevices = mapping.getLogicalDeviceIDList(inputF);
-          subDAG->backendName = mapping.getPartitionBackendName(inputF);
-          funcDAG[inputF] = subDAG.get();
-          nodes.push_back(std::move(subDAG));
+          funcDAG[inputF] = schedule.addTask(
+              inputF->getName(), mapping.getPartitionBackendName(inputF),
+              mapping.getLogicalDeviceIDList(inputF));
         }
 
         // subF is a child of inputF, inputF is a parent of subF.
         if (parents.find(inputF) == parents.end()) {
-          funcDAG[inputF]->children.push_back(funcDAG[subF]);
-          funcDAG[subF]->parents.push_back(funcDAG[inputF]);
+          schedule.addChild(funcDAG[inputF], funcDAG[subF]);
           parents.insert(inputF);
         }
         // If we've already created a placeholder for this dependence, use it.
@@ -787,10 +760,7 @@ void Partitioner::doPartitioning(llvm::StringRef funcName,
   }
 
   if (saveDAG) {
-    DAG dag;
-    dag.root = std::move(DAGRoot);
-    dag.nodes = std::move(nodes);
-    partitions_.push_back(std::move(dag));
+    partitions_.push_back(std::move(schedule));
   }
 
   // Update links between nodes in the cloned functions. Add placeholders (and
@@ -805,14 +775,6 @@ void Partitioner::doPartitioning(llvm::StringRef funcName,
         auto *clone = currToNew[input.getNode()];
         N.setNthInput(inp, NodeValue(clone, input.getResNo()));
       }
-    }
-  }
-
-  // For all DAGNode without parents, link them to the root DAG.
-  for (auto *subF : mapping.getPartitions()) {
-    if (funcDAG[subF]->parents.size() == 0) {
-      funcDAG[subF]->parents.push_back(root);
-      root->children.push_back(funcDAG[subF]);
     }
   }
 }
@@ -919,20 +881,11 @@ llvm::Error Partitioner::createDAGWithoutPartition(
       auto backend = backendMap[backendName].backend;
       RETURN_IF_ERR(::glow::optimizeFunction(F, *backend, cctx));
     }
-    std::unique_ptr<DAGNode> DAG0 = llvm::make_unique<DAGNode>();
-    DAG0->logicalDevices = {0};
-    DAG0->name = F->getName();
-    DAG0->module = module_;
-    std::unique_ptr<DAGNode> DAG1 = llvm::make_unique<DAGNode>();
-    DAG1->logicalDevices = {0};
-    DAG1->name = F->getName();
-    DAG1->backendName = backendName;
-    DAG1->parents.push_back(DAG0.get());
-    DAG0->children.push_back(DAG1.get());
-    DAGNodePtrVec nodes;
-    nodes.push_back(std::move(DAG1));
-    partitions_.push_back({std::move(DAG0), std::move(nodes)});
+    Schedule schedule(F->getName());
+    schedule.addTask(F->getName(), backendName, {0});
+    partitions_.push_back(std::move(schedule));
   }
+
   if (saturateHost_) {
     // Saturate the Host.
     saturateHost(1);
@@ -959,8 +912,8 @@ llvm::Error Partitioner::Partition(CompilationContext &cctx) {
     funcToBackend[F_] = backendName;
 
     if (memSize_ < backendMap_[backendName].memSize) {
-      // No partition is needed. Create DAGNode and return. This root is alway a
-      // dummy function.
+      // No partition is needed. Create Schedule and return. This root is
+      // alway a dummy function.
       if (logPartition) {
         LOG(INFO) << "The model is too small for applying partition.\n"
                   << "Model size : " << memSize_ << "\n"
@@ -1013,7 +966,7 @@ llvm::Error Partitioner::Partition(CompilationContext &cctx) {
   doPartitioning(origName, funcs, mapping, true);
 
   // Step 6 : Post-partition optimization - Adjust the logicalDevice for each
-  // DAGNode.
+  // Node.
   if (saturateHost_ && backends.size() == 1 &&
       mapping.getPartitions().size() < deviceInfo_.size()) {
     // Attempt to saturate the host when there is only one type of backend.

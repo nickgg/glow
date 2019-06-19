@@ -16,7 +16,7 @@
 #ifndef GLOW_RUNTIME_EXECUTOR_H
 #define GLOW_RUNTIME_EXECUTOR_H
 
-#include "glow/Runtime/RuntimeTypes.h"
+#include "glow/Runtime/Schedule.h"
 
 #include <functional>
 #include <map>
@@ -44,7 +44,7 @@ public:
   /// containing placeholder-tensor mappings for the nodes in the DAG that have
   /// no postrequisites (i.e. the final results) in addition to the mappings
   /// present in \p bindings.
-  virtual void run(const DAGNode *root,
+  virtual void run(const Schedule &schedule,
                    std::unique_ptr<ExecutionContext> context,
                    RunIdentifierTy runId, ResultCBTy cb) = 0;
 

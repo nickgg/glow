@@ -60,17 +60,17 @@ Provisioner::Provisioner(DeviceManagerMapTy &devices) {
 llvm::Error Provisioner::provision(DAGListTy &networks, Module &module,
                                    CompilationContext &cctx) {
   // Walk the networks and group by logicalDeviceId.
-  std::map<DeviceIDTy, std::vector<DAGNode *>> logicalDevices;
+  std::map<DeviceIDTy, std::vector<Schedule::Task *>> logicalDevices;
   // For each network visit all the partitions (nodes) and add the node to each
   // logical device it is assigned to.
   for (auto &network : networks) {
-    for (auto &node : network.nodes) {
-      for (auto logical : node->logicalDevices) {
+    for (auto &node : network.tasks()) {
+      for (auto logical : node.logicalDevices) {
         auto it = logicalDevices.find(logical);
         if (it != logicalDevices.end()) {
-          it->second.push_back(node.get());
+          it->second.push_back(&node);
         } else {
-          logicalDevices.emplace(logical, std::vector<DAGNode *>{node.get()});
+          logicalDevices.emplace(logical, std::vector<Schedule::Task *>{&node});
         }
       }
     }
@@ -171,7 +171,7 @@ llvm::Error Provisioner::provision(DAGListTy &networks, Module &module,
         RETURN_IF_ERR(*DCHECK_NOTNULL(addErr.get()));
         // Set deviceID for each node added
         for (auto &node : logicalDevices[logicalID]) {
-          node->deviceIDs.push_back(deviceID);
+          node->devices.push_back(deviceID);
         }
         break;
       }

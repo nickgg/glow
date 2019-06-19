@@ -19,6 +19,8 @@
 
 #include "gtest/gtest.h"
 
+#include <deque>
+
 using namespace glow;
 
 class PartitionerTest : public ::testing::Test {
@@ -31,37 +33,45 @@ protected:
   PlaceholderBindings bindings_;
 };
 
-/// Execute a graph of functions based on the given DAG.
-static void executeDAG(DAGNode *G, Module &mod, PlaceholderBindings &bindings,
-                       llvm::ArrayRef<Placeholder *> vars,
-                       llvm::ArrayRef<Tensor *> inputs) {
+/// Execute a graph of functions based on the given Schedule.
+static void executeSchedule(Schedule G, Module &mod,
+                            PlaceholderBindings &bindings,
+                            llvm::ArrayRef<Placeholder *> vars,
+                            llvm::ArrayRef<Tensor *> inputs) {
   std::unordered_map<std::string, Function *> name2func;
 
   for (auto *F : mod.getFunctions()) {
     name2func[F->getName()] = F;
   }
 
-  std::vector<DAGNode *> exeList;
-  int endPt = 0;
-  int curPt = 0;
-  // The first node is always the dummy node.
-  exeList.push_back(G);
-  endPt++;
-  while (curPt < endPt) {
-    DAGNode *dag = exeList.at(curPt);
-    // The root in a G is always a dummy function.
-    if (curPt > 0) {
-      ExecutionEngine EE;
-      Function *func = name2func[dag->name];
-      EE.compile(CompilationMode::Infer, func);
-      updateInputPlaceholders(bindings, vars, inputs);
-      EE.run(bindings);
+  std::deque<size_t> exeIndexes;
+  size_t tasks = G.tasks().size();
+  for (size_t i = 0; i < tasks; ++i) {
+    if (G.tasks()[i].parents.empty()) {
+      exeIndexes.push_back(i);
     }
-    for (int i = 0, e = dag->children.size(); i < e; i++) {
-      exeList.push_back(dag->children.at(i));
-      endPt++;
+  }
+
+  while (!exeIndexes.empty()) {
+    size_t index = exeIndexes.front();
+    exeIndexes.pop_front();
+    Schedule::Task &t = G.tasks()[index];
+
+    ExecutionEngine EE;
+    Function *func = name2func[t.name];
+    EE.compile(CompilationMode::Infer, func);
+    updateInputPlaceholders(bindings, vars, inputs);
+    EE.run(bindings);
+
+    for (size_t childIndex : t.children) {
+      Schedule::Task &child = G.tasks()[childIndex];
+      child.parents.erase(
+          std::remove(child.parents.begin(), child.parents.end(), index),
+          child.parents.end());
+      if (child.parents.empty()) {
+        exeIndexes.push_back(childIndex);
+      }
     }
-    curPt++;
   }
 }
 
@@ -163,7 +173,7 @@ TEST_F(PartitionerTest, Basic1) {
   bindings_.allocate(mod_.getPlaceholders());
   for (auto it = myList.begin(); it != myList.end(); ++it) {
     bindings_.allocate(mod_.getPlaceholders());
-    executeDAG((*it).root.get(), mod_, bindings_, {input}, {&in});
+    executeSchedule(*it, mod_, bindings_, {input}, {&in});
     Tensor test = res.clone();
     EXPECT_TRUE(ref.isEqual(test));
   }
@@ -234,11 +244,11 @@ TEST_F(PartitionerTest, Basic2) {
   ASSERT_EQ(myList.size(), 1);
   ASSERT_TRUE(checkSaveNode(mod_));
 
-  for (auto &dag : myList) {
-    for (auto &node : dag.nodes) {
+  for (auto &schedule : myList) {
+    for (auto &node : schedule.tasks()) {
       // Since saturateHost is set true, in this case, there should be 2 copys
       // of the partitions.
-      ASSERT_EQ(node->logicalDevices.size(), 2);
+      ASSERT_EQ(node.logicalDevices.size(), 2);
     }
   }
 
@@ -246,7 +256,7 @@ TEST_F(PartitionerTest, Basic2) {
   bindings_.allocate(mod_.getPlaceholders());
   for (auto it = myList.begin(); it != myList.end(); ++it) {
     bindings_.allocate(mod_.getPlaceholders());
-    executeDAG((*it).root.get(), mod_, bindings_, {input}, {&in});
+    executeSchedule(*it, mod_, bindings_, {input}, {&in});
     Tensor test = res.clone();
     EXPECT_TRUE(ref.isEqual(test));
   }
@@ -557,11 +567,11 @@ TEST_F(PartitionerTest, SimpleHeterogeneousPartitioning) {
     ASSERT_EQ(myList.size(), 1);
     ASSERT_TRUE(checkSaveNode(mod_));
 
-    for (auto &dag : myList) {
-      for (auto &node : dag.nodes) {
+    for (auto &schedule : myList) {
+      for (auto &node : schedule.tasks()) {
         // Although the saturateHost is set true, no saturating the host in
         // heterogeneous partiton.
-        ASSERT_EQ(node->logicalDevices.size(), 1);
+        ASSERT_EQ(node.logicalDevices.size(), 1);
       }
     }
     mod_.clear();
@@ -601,12 +611,12 @@ TEST_F(PartitionerTest, logicalIDTest0) {
   ASSERT_EQ(myList.size(), 1);
   ASSERT_TRUE(checkSaveNode(mod_));
 
-  for (auto &dag : myList) {
+  for (auto &schedule : myList) {
     // Check number of logical devices;
     llvm::SmallSet<DeviceIDTy, 4> usedID;
-    for (auto &node : dag.nodes) {
-      ASSERT_EQ(node->logicalDevices.size(), 1);
-      usedID.insert(node->logicalDevices[0]);
+    for (auto &node : schedule.tasks()) {
+      ASSERT_EQ(node.logicalDevices.size(), 1);
+      usedID.insert(node.logicalDevices[0]);
     }
     // Check there are 2 logical devices.
     ASSERT_EQ(usedID.size(), 2);
@@ -636,14 +646,14 @@ TEST_F(PartitionerTest, logicalIDTest1) {
   ASSERT_EQ(myList.size(), 1);
   ASSERT_TRUE(checkSaveNode(mod_));
 
-  for (auto &dag : myList) {
+  for (auto &schedule : myList) {
     // Check number of logical devices;
     llvm::SmallSet<DeviceIDTy, 4> usedID;
-    for (auto &node : dag.nodes) {
+    for (auto &node : schedule.tasks()) {
       // Although the saturateHost is set true, no saturating the host in
       // heterogeneous partiton.
-      ASSERT_EQ(node->logicalDevices.size(), 1);
-      usedID.insert(node->logicalDevices[0]);
+      ASSERT_EQ(node.logicalDevices.size(), 1);
+      usedID.insert(node.logicalDevices[0]);
     }
     ASSERT_EQ(usedID.size(), 2);
   }

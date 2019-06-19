@@ -64,61 +64,62 @@ struct DeviceInfo {
   float peakPCIeBw;
 };
 
-/// Individual Node in the DAG for a given network. This contains all the
-/// information needed to run the sub-network at inference time.
-struct DAGNode {
-  /// The children of this node, these are nodes that depend on the current
-  /// node.
-  std::vector<DAGNode *> children;
-  /// Pointers to the parents of this node. This is used by the executor for
-  /// determining if a given node has all dependencies met.
-  std::vector<DAGNode *> parents;
-  /// IDs of the deviceManagers that this network is assigned to.
-  std::vector<DeviceIDTy> deviceIDs;
-  /// Backend name for this network.
-  std::string backendName;
-  /// The logicalDevice is an output of the Partitioner to indicate that two
-  /// networks should be assigned to the same device. Multiple logical devices
-  /// indicates the network should be duplicated.
-  std::vector<DeviceIDTy> logicalDevices;
-  /// Index of the current deviceID in deviceIDs. This is used by the Executor
-  /// when picking a device to request a network run.
-  unsigned currentDeviceIdx{0};
-  /// Name assigned to the sub-network, this is the id that will be passed to
-  /// the DeviceManager when requesting a run of the network.
-  std::string name;
-  /// Runtime bundle containing all the symbol information for this network at
-  /// runtime.
-  std::unique_ptr<RuntimeBundle> runtimeBundle;
+// /// Individual Node in the DAG for a given network. This contains all the
+// /// information needed to run the sub-network at inference time.
+// struct DAGNode {
+//   /// The children of this node, these are nodes that depend on the current
+//   /// node.
+//   std::vector<DAGNode *> children;
+//   /// Pointers to the parents of this node. This is used by the executor for
+//   /// determining if a given node has all dependencies met.
+//   std::vector<DAGNode *> parents;
+//   /// IDs of the deviceManagers that this network is assigned to.
+//   std::vector<DeviceIDTy> deviceIDs;
+//   /// Backend name for this network.
+//   std::string backendName;
+//   /// The logicalDevice is an output of the Partitioner to indicate that two
+//   /// networks should be assigned to the same device. Multiple logical
+//   devices
+//   /// indicates the network should be duplicated.
+//   std::vector<DeviceIDTy> logicalDevices;
+//   /// Index of the current deviceID in deviceIDs. This is used by the
+//   Executor
+//   /// when picking a device to request a network run.
+//   unsigned currentDeviceIdx{0};
+//   /// Name assigned to the sub-network, this is the id that will be passed to
+//   /// the DeviceManager when requesting a run of the network.
+//   std::string name;
+//   /// Runtime bundle containing all the symbol information for this network
+//   at
+//   /// runtime.
+//   std::unique_ptr<RuntimeBundle> runtimeBundle;
 
-  /// Pointer to module the function came from. This is so the executor can
-  /// access the associated PHs for the function that are stored in the Module.
-  Module *module{nullptr};
+//   /// Pointer to module the function came from. This is so the executor can
+//   /// access the associated PHs for the function that are stored in the
+//   Module. Module *module{nullptr};
 
-  DeviceIDTy getNextDevice() {
-    currentDeviceIdx++;
-    return deviceIDs[currentDeviceIdx % deviceIDs.size()];
-  }
-};
+//   DeviceIDTy getNextDevice() {
+//     currentDeviceIdx++;
+//     return deviceIDs[currentDeviceIdx % deviceIDs.size()];
+//   }
+// };
 
-/// This struct represents a DAG. The first element is the root of a DAG, and
-/// the second one is a list of all rest nodes in this DAG.
-using DAGNodePtr = std::unique_ptr<DAGNode>;
-using DAGNodePtrVec = std::vector<std::unique_ptr<DAGNode>>;
+// /// This struct represents a DAG. The first element is the root of a DAG, and
+// /// the second one is a list of all rest nodes in this DAG.
+// using DAGNodePtr = std::unique_ptr<DAGNode>;
+// using DAGNodePtrVec = std::vector<std::unique_ptr<DAGNode>>;
 
-struct DAG {
-  /// This is a root node it does not map directly to a loaded function. It
-  /// contains the name of the network, a list of children, and a reference to
-  /// the Module the function came from.
-  DAGNodePtr root;
-  /// This is a vector of all the DAGNodes. Structure is encoded in the DAGNodes
-  /// with pointers to parents and children.
-  DAGNodePtrVec nodes;
-};
-
-/// This list contains all the created DAGNodes from the Partitioner. The
-/// contained DAGNodes can only refer to the DAGNodes from the same DAGListTy.
-using DAGListTy = std::vector<DAG>;
+// struct DAG {
+//   /// This is a root node it does not map directly to a loaded function. It
+//   /// contains the name of the network, a list of children, and a reference
+//   to
+//   /// the Module the function came from.
+//   DAGNodePtr root;
+//   /// This is a vector of all the DAGNodes. Structure is encoded in the
+//   DAGNodes
+//   /// with pointers to parents and children.
+//   DAGNodePtrVec nodes;
+// };
 
 /// This is the base class for DeviceManager configurations. Any specific
 /// device can extend this class to contain information to identify

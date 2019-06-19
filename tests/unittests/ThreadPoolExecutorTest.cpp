@@ -190,8 +190,7 @@ private:
 
 using PlaceholderNameMapTy =
     std::unordered_map<std::string, std::unique_ptr<Placeholder>>;
-using DAGNodeNameMapTy =
-    std::unordered_map<std::string, std::unique_ptr<DAGNode>>;
+using TaskNameMapTy = std::unordered_map<std::string, size_t>;
 
 /// This class serves as an interface to a test created by ExecutorTestBuilder.
 /// It also contains the resources necessary to run the test. Instances are
@@ -199,20 +198,19 @@ using DAGNodeNameMapTy =
 class ExecutorTest final {
 public:
   /// Constructor.
-  ExecutorTest(const std::shared_ptr<Executor> &executor,
-               std::unique_ptr<DAGNode> root, std::unique_ptr<Module> module,
-               std::unique_ptr<Type> type, DAGNodeNameMapTy nodes,
-               PlaceholderNameMapTy placeholders,
+  ExecutorTest(const std::shared_ptr<Executor> &executor, Schedule schedule,
+               std::shared_ptr<Module> module, std::unique_ptr<Type> type,
+               TaskNameMapTy nodes, PlaceholderNameMapTy placeholders,
                std::unique_ptr<ExecutionContext> inputContext,
                std::unique_ptr<ExecutionContext> outputContext,
                RunIdentifierTy runId, bool expectSuccess)
-      : executor_(executor), root_(std::move(root)), module_(std::move(module)),
+      : executor_(executor), schedule_(std::move(schedule)), module_(module),
         type_(std::move(type)), nodes_(std::move(nodes)),
         placeholders_(std::move(placeholders)),
         inputContext_(std::move(inputContext)),
         outputContext_(std::move(outputContext)), runId_(runId),
         expectSuccess_(expectSuccess), testRun_(false) {
-    root_->module = module_.get();
+    schedule_->module_ = module_;
   }
 
   /// Run the test.
@@ -229,7 +227,7 @@ public:
     // Call Executor::run().
     std::promise<bool> promise;
     std::future<bool> future = promise.get_future();
-    executor_->run(root_.get(), std::move(inputContext_), runId_,
+    executor_->run(schedule_, std::move(inputContext_), runId_,
                    [&promise, &executorRunId, &executorOutputContext](
                        RunIdentifierTy runId, llvm::Error err,
                        std::unique_ptr<ExecutionContext> context) {
@@ -261,14 +259,14 @@ public:
 private:
   /// The Executor to run the test with.
   std::shared_ptr<Executor> executor_;
-  /// The root node of the DAG being tested.
-  std::unique_ptr<DAGNode> root_;
+  /// The Schedule being tested.
+  Schedule schedule_;
   /// The Module containing the PHs.
-  std::unique_ptr<Module> module_;
+  std::shared_ptr<Module> module_;
   /// The Type for all of the Placeholders that will be used during execution.
   std::unique_ptr<Type> type_;
-  /// All nodes in the DAG.
-  DAGNodeNameMapTy nodes_;
+  /// All nodes in the Schedule.
+  TaskNameMapTy nodes_;
   /// All Placeholders that will be used during execution.
   PlaceholderNameMapTy placeholders_;
   /// The input ExecutionContext that should be passed to Executor::run()
@@ -286,13 +284,13 @@ private:
 };
 
 /// This class helps build tests for testing Executor implementations. It
-/// presents a simple interface for executor DAG construction; nodes are added
-/// by specifying its parents, device ID, and named inputs and outputs. This
-/// builder class takes care of all of the work needed to actually run this DAG:
-/// creation of Placeholders and Tensors for all inputs and outputs; creation of
-/// input/output ExecutionContext for each node to verify that each one
-/// receives the correct input and produces the correct output; and registration
-/// with the TestDeviceManager.
+/// presents a simple interface for executor Schedule construction; nodes are
+/// added by specifying its parents, device ID, and named inputs and outputs.
+/// This builder class takes care of all of the work needed to actually run this
+/// Schdeule: creation of Placeholders and Tensors for all inputs and outputs;
+/// creation of input/output ExecutionContext for each node to verify that each
+/// one receives the correct input and produces the correct output; and
+/// registration with the TestDeviceManager.
 class ExecutorTestBuilder final {
 public:
   /// Constructor. The exact value of type_ doesn't really matter since the
@@ -300,17 +298,16 @@ public:
   /// between ExecutionContexts correctly.
   ExecutorTestBuilder(const std::shared_ptr<Executor> &executor,
                       const DeviceManagerMapTy &deviceManagers)
-      : executor_(executor), module_(llvm::make_unique<Module>()),
-        root_(llvm::make_unique<DAGNode>()),
+      : executor_(executor), module_(std::make_shared<Module>()), root_("null"),
         bindings_(llvm::make_unique<PlaceholderBindings>()),
         type_(
             std::unique_ptr<Type>(new Type(ElemKind::FloatTy, {32, 64, 128}))),
         success_(true), deviceManagers_(deviceManagers) {}
 
-  /// Add a node named \p name to the DAG with parents \p parents that runs on a
-  /// device specified by \p deviceId. A RuntimeBundle is created for the node
-  /// with runtime symbol information created from \p inputs and \p outputs.
-  /// \p runId is the run ID for the node and \p success is the desired
+  /// Add a node named \p name to the Schedule with parents \p parents that runs
+  /// on a device specified by \p deviceId. A RuntimeBundle is created for the
+  /// node with runtime symbol information created from \p inputs and \p
+  /// outputs. \p runId is the run ID for the node and \p success is the desired
   /// execution status. If \p parents is empty, the new node is added as a child
   /// of the root.
   void addNode(const std::string &name, DeviceIDTy deviceId,
@@ -318,8 +315,10 @@ public:
                llvm::ArrayRef<llvm::StringRef> inputs,
                llvm::ArrayRef<llvm::StringRef> outputs, RunIdentifierTy runId,
                bool success) {
-    auto newNode = llvm::make_unique<DAGNode>();
-    auto *newNodeRawPtr = newNode.get();
+    size_t newIdx = schedule_.addTask(name, "", {deviceId});
+    // Add the new node to nodes_ and leaves_.
+    nodes_.[name] = newIdx;
+    leaves_.insert(newIdx);
 
     // If this is the first node being added, record the run ID for the graph.
     // Otherwise, make sure that the runId matches that of the previous nodes.
@@ -338,20 +337,14 @@ public:
     // make the root the only parent. Also, update the set of known leaves
     // by removing any parents of the new node from it. This will be useful
     // later.
-    if (!parents.empty()) {
-      for (const auto &parent : parents) {
-        auto it = nodes_.find(parent);
-        if (it == nodes_.end()) {
-          assert(!"Parent specified for node not found!");
-        }
-        DAGNode *parentPtr = (it->second).get();
-        (newNode->parents).emplace_back(parentPtr);
-        (parentPtr->children).emplace_back(newNodeRawPtr);
-        leaves_.erase(parentPtr);
+    for (const auto &parent : parents) {
+      auto it = nodes_.find(parent);
+      if (it == nodes_.end()) {
+        assert(!"Parent specified for node not found!");
       }
-    } else {
-      (newNode->parents).emplace_back(root_.get());
-      (root_->children).emplace_back(newNode.get());
+
+      schedule_.addChild(it.second, newIdx);
+      leaves_.erase(it.second);
     }
 
     // Iterate through inputs and outputs and:
@@ -407,10 +400,7 @@ public:
     }
 
     // Set the name, device ID, and RuntimeBundle of the new node.
-    newNode->name = name;
-    newNode->deviceIDs = {deviceId};
-
-    newNode->runtimeBundle = llvm::make_unique<RuntimeBundle>(
+    schedule.tasks()[newIdx].runtimeBundle = std::make_shared<RuntimeBundle>(
         symbolTable, /*constWeight=*/0, /*mutableWeight=*/0,
         /*activations=*/0);
 
@@ -431,10 +421,6 @@ public:
 
     (void)registered;
     assert(registered && "Node registration was not successful");
-
-    // Add the new node to nodes_ and leaves_.
-    nodes_.insert(std::make_pair(name, std::move(newNode)));
-    leaves_.insert(newNodeRawPtr);
   }
 
   /// Emit the test built so far and clear any state in the builder.
@@ -472,15 +458,15 @@ public:
           symbol, outputContext->getPlaceholderBindings());
     }
     // Create the test object.
-    ExecutorTest test(executor_, std::move(root_), std::move(module_),
-                      std::move(type_), std::move(nodes_),
-                      std::move(placeholders_), std::move(inputContext),
-                      std::move(outputContext), runId_, success_);
+    ExecutorTest test(executor_, std::move(root_), module_, std::move(type_),
+                      std::move(nodes_), std::move(placeholders_),
+                      std::move(inputContext), std::move(outputContext), runId_,
+                      success_);
 
     // Reset builder state to allow a new test to be constructed with this
     // instance.
     root_ = llvm::make_unique<DAGNode>();
-    module_ = llvm::make_unique<Module>();
+    module_ = std::make_shared<Module>();
     bindings_->clear();
     type_ = std::unique_ptr<Type>(new Type(ElemKind::FloatTy, {1, 2, 2}));
     nodes_.clear();
@@ -563,9 +549,9 @@ private:
   /// The Executor being tested.
   std::shared_ptr<Executor> executor_;
   /// Module for holding PHs
-  std::unique_ptr<Module> module_;
-  /// The root of the DAG being constructed.
-  std::unique_ptr<DAGNode> root_;
+  std::shared_ptr<Module> module_;
+  /// The Schedule being tested.
+  Schedule schedule_;
   /// This PlaceholderBindings holds all created and initialized Placeholders
   /// for the test.
   std::unique_ptr<PlaceholderBindings> bindings_;
@@ -576,10 +562,10 @@ private:
   /// PRNG for filling Tensors.
   PseudoRNG rng_;
   /// The nodes in the DAG being constructed.
-  DAGNodeNameMapTy nodes_;
-  /// The leaves in the DAG being constructed. This helps collect output symbols
-  /// during test emission.
-  std::unordered_set<const DAGNode *> leaves_;
+  TaskNameMapTy nodes_;
+  /// Indexes of the leaves in the Schedule being constructed. This helps
+  /// collect output symbols during test emission.
+  std::unordered_set<size_t> leaves_;
   /// All Placeholders in the test.
   PlaceholderNameMapTy placeholders_;
   /// The run ID for the DAG.
